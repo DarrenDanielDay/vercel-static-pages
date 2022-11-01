@@ -1,0 +1,210 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+export interface Props {
+  // No props.
+}
+---
+
+<Layout title="Cannon in D">
+  <button data-cannon-button>play cannon</button>
+</Layout>
+
+<script>
+  type PitchName = "A" | "B" | "C" | "D" | "E" | "F" | "G";
+  function isPitchName(text: string): text is PitchName {
+    return text in offsetMap;
+  }
+  /**
+   * Basic frequency for all pitches.
+   */
+  const A4 = 440;
+  const offsetMap: Record<PitchName, number> = {
+    C: -9,
+    D: -7,
+    E: -5,
+    F: -4,
+    G: -2,
+    A: 0,
+    B: 2,
+  };
+
+  type PitchLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
+  type Justify = "b" | "#" | "";
+
+  type Pitch = `${PitchName}${PitchLevel}${Justify}`;
+
+  function parsePitch(pitch: Pitch) {
+    const match = pitch.match(/(\w)(\d)([b#]?)/i);
+    if (!match) {
+      throw new Error();
+    }
+    const [, name, level, offset] = match;
+    if (!isPitchName(name)) {
+      throw new Error(`Invalid character in pitch: ${name}`);
+    }
+    const nameOffsetToA = offsetMap[name];
+    const levelOffsetTo4 = +level - 4;
+    const justifyOffset = offset ? (offset === "#" ? 1 : -1) : 0;
+    return A4 * 2 ** (levelOffsetTo4 + (nameOffsetToA + justifyOffset) / 12);
+  }
+  const π = Math.PI;
+  const sin = Math.sin;
+  function* sineWave(
+    amplitude: number,
+    frequency: number,
+    offset: number,
+    range: [number, number],
+    sampleRate: number
+  ): Generator<number> {
+    const ω = 2 * π * frequency;
+    function f(t: number) {
+      return amplitude * sin(ω * t + offset);
+    }
+    const [begin, end] = range;
+    let generated = begin;
+    const step = 1 / sampleRate;
+    WhileLoop: while (true) {
+      for (let j = 0; j < sampleRate; j++) {
+        generated += step;
+        yield f(generated);
+        if (generated > end) {
+          break WhileLoop;
+        }
+      }
+    }
+  }
+  interface Note {
+    volume: number;
+    frequency: number;
+    length: number;
+  }
+
+  function* noteWave(data: Note, sampleRate: number): Generator<number> {
+    yield* sineWave(data.volume, data.frequency, 0, [0, data.length], sampleRate);
+  }
+
+  function pitchNote(text: Pitch, length: number, volume: number): Note {
+    return {
+      frequency: parsePitch(text),
+      length,
+      volume,
+    };
+  }
+
+  /**
+   * 1 beat = ♩
+   */
+  function bpmOfQuarter(bpm: number, volume: number) {
+    const length = 60 / bpm;
+    return (text: Pitch, timesOfBeat: number) => {
+      return pitchNote(text, timesOfBeat * length, volume);
+    };
+  }
+
+  function* mergeTracks(tracks: Iterable<number>[]) {
+    const workingTrackSet = new Set(tracks.map((track) => track[Symbol.iterator]()));
+    while (workingTrackSet.size) {
+      let count = 0;
+      let sum = 0;
+      for (const track of [...workingTrackSet]) {
+        const result = track.next();
+        if (result.done) {
+          workingTrackSet.delete(track);
+        } else {
+          sum += result.value;
+          count++;
+        }
+      }
+      yield sum / count;
+    }
+  }
+  function* generateForNotes(notes: Note[], sampleRate: number) {
+    for (const note of notes) {
+      yield* noteWave(note, sampleRate);
+    }
+  }
+
+  function main() {
+    const p = bpmOfQuarter(60, 0.3);
+    const cannonHigh: Note[] = [
+      p("F5#", 2),
+      p("E5", 2),
+      p("D5", 2),
+      p("C5#", 2),
+
+      p("B4", 2),
+      p("A4", 2),
+      p("B4", 2),
+      p("C5#", 2),
+    ];
+
+    const cannonLow: Note[] = [
+      p("D3", 0.5),
+      p("A3", 0.5),
+      p("D4", 0.5),
+      p("F4#", 0.5),
+
+      p("A2", 0.5),
+      p("E3", 0.5),
+      p("A3", 0.5),
+      p("C4#", 0.5),
+
+      p("B2", 0.5),
+      p("F3#", 0.5),
+      p("B3", 0.5),
+      p("D4", 0.5),
+
+      p("F2#", 0.5),
+      p("C3#", 0.5),
+      p("F3#", 0.5),
+      p("A3", 0.5),
+
+      p("G2", 0.5),
+      p("D3", 0.5),
+      p("G3", 0.5),
+      p("B3", 0.5),
+
+      p("D2", 0.5),
+      p("A2", 0.5),
+      p("D3", 0.5),
+      p("F3#", 0.5),
+
+      p("G2", 0.5),
+      p("D3", 0.5),
+      p("G3", 0.5),
+      p("B3", 0.5),
+
+      p("A2", 0.5),
+      p("E3", 0.5),
+      p("A3", 0.5),
+      p("C4#", 0.5),
+    ];
+    const buttons = document.querySelectorAll("button[data-cannon-button]");
+    for (const button of buttons) {
+      if (!(button instanceof HTMLButtonElement)) {
+        continue;
+      }
+      button.onclick = () => {
+        const context = new AudioContext({
+          sampleRate: 44100,
+        });
+        const data = Float32Array.from(
+          mergeTracks([
+            generateForNotes(cannonHigh, context.sampleRate),
+            generateForNotes(cannonLow, context.sampleRate),
+          ])
+        );
+        const buffer = context.createBuffer(1, data.length, context.sampleRate);
+        buffer.copyToChannel(data, 0);
+        const bufferSrc = context.createBufferSource();
+        bufferSrc.buffer = buffer;
+        bufferSrc.connect(context.destination);
+        bufferSrc.start(0);
+      };
+    }
+  }
+  window.addEventListener("load", main);
+  export {};
+</script>
